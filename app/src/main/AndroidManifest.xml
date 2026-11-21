@@ -4,6 +4,9 @@
     <application
         android:allowBackup="true"
         android:label="Study with Love"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/AppTheme"
         android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
