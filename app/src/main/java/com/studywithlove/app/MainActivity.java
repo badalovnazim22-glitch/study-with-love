@@ -22,6 +22,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.os.Handler;
+import android.os.SystemClock;
 import android.widget.Toast;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -45,6 +49,15 @@ public class MainActivity extends Activity {
     private TextView topicProgressLabel;
     private ProgressBar topicProgressBar;
     private Button[] progressButtons = new Button[4];
+    private final Handler timerHandler = new Handler();
+    private Runnable timerTick;
+    private TextView timerDisplay, timerStatus;
+    private Button timerStartButton;
+    private int selectedStudyMinutes = 25, selectedBreakMinutes = 5;
+    private long timerEndElapsed = 0L, timerRemainingMs = 0L;
+    private boolean timerRunning = false, timerIsBreak = false;
+    private long timerSessionStarted = 0L;
+    private int moodImageIndex = -1;
     private static final String PREFS = "study_progress";
     private static final String[] DAY_NAMES = {"Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
     private final List<String> reminderTimes = new ArrayList<>();
@@ -166,6 +179,9 @@ public class MainActivity extends Activity {
         root.addView(progress, lp(-1, -2, 0, 0, 0, 18));
         action("📐  Математика", "Выбрать раздел и тему", this::showChapters);
         action("📊  Мой прогресс", "Посмотреть прогресс по разделам и темам", this::showProgress);
+        action("🍅  Таймер Pomodoro", "Занимайся небольшими подходами с перерывами", this::showPomodoro);
+        action("📔  Дневник успехов", "Записывай свои маленькие и большие победы", this::showDiary);
+        action("🥺  Мне грустно", "Немного тепла, милых картинок и поддержки", this::showMood);
         action("💌  Послание", "Немного поддержки на сегодня", () -> { currentScreen = "message"; String m = messages[new Random().nextInt(messages.length)]; base("Послание для тебя 💌", "Маленькое напоминание:"); addText(root, m, 22, PINK, true); backHome(); });
         action("🔔  Настроить напоминания", "Выбрать дни недели и удобное время", this::showReminderSettings);
         LinearLayout note = card(); addText(note, "⏰  НАПОМИНАНИЯ", 13, PINK, true); addText(note, reminderSummary(), 14, DARK, false); root.addView(note, lp(-1, -2, 0, 8, 0, 0));
@@ -189,7 +205,7 @@ public class MainActivity extends Activity {
         base(chapter, "Выбери тему, которую хочешь изучить:");
         for (String topic : chapters.get(chapter)) {
             int percent = topicProgress(topic);
-            action((percent == 100 ? "✓  " : "♡  ") + topic, "Изучено на " + percent + "% · Нажми, чтобы открыть тему", () -> { selectedTopic = topic; showTopic(topic); });
+            action((percent == 100 ? "✓  " : "♡  ") + topic, "Изучено на " + percent + "%", () -> { selectedTopic = topic; showTopic(topic); });
         }
         Button back = button("← К разделам", false); back.setOnClickListener(v -> showChapters()); root.addView(back, lp(-1, 52, 0, 12, 0, 0));
     }
@@ -360,6 +376,8 @@ public class MainActivity extends Activity {
         addText(summary, "🌸  ОБЩИЙ РЕЗУЛЬТАТ", 12, PINK, true);
         addText(summary, overall + "% изучено", 27, DARK, true);
         addText(summary, completedTopics + " из " + totalTopics + " тем завершено", 14, MUTED, false);
+        addText(summary, "⏱ Сегодня: " + prefs.getInt("study_minutes_" + todayKey(), 0) + " минут занятий", 14, PINK, true);
+        addText(summary, "Всего: " + totalStudyMinutes() + " минут", 13, MUTED, false);
         addProgressLine(summary, "Весь учебный план", overall);
         root.addView(summary, lp(-1, -2, 0, 0, 0, 16));
 
@@ -369,7 +387,11 @@ public class MainActivity extends Activity {
             for (String topic : topics) sum += topicProgress(topic);
             int chapterPercent = topics.isEmpty() ? 0 : sum / topics.size();
             LinearLayout section = card();
-            addText(section, chapter, 17, DARK, true);
+            TextView chapterBadge = text("✿  РАЗДЕЛ " + (new ArrayList<>(chapters.keySet()).indexOf(chapter) + 1), 12, PINK, true);
+            chapterBadge.setBackground(shape(0xFFFFEEF3, 16, 0xFFFFD5E1));
+            chapterBadge.setPadding(dp(10), dp(7), dp(10), dp(7));
+            section.addView(chapterBadge, lp(-2, -2, 0, 0, 0, 8));
+            addText(section, chapter.replaceFirst("^[^ ]+\\s*", ""), 17, DARK, true);
             addText(section, chapterPercent + "% · " + countCompleted(topics) + " из " + topics.size() + " тем полностью изучено", 13, MUTED, false);
             addProgressLine(section, "Прогресс раздела", chapterPercent);
             for (String topic : topics) {
@@ -381,6 +403,117 @@ public class MainActivity extends Activity {
         Button back = button("← На главную", true);
         back.setOnClickListener(v -> showHome());
         root.addView(back, lp(-1, 52, 0, 4, 0, 0));
+    }
+
+    private int totalStudyMinutes() {
+        int total = 0;
+        for (String key : prefs.getAll().keySet()) if (key.startsWith("study_minutes_")) total += prefs.getInt(key, 0);
+        return total;
+    }
+
+    private void showPomodoro() {
+        currentScreen = "pomodoro";
+        base("Таймер Pomodoro 🍅", "Выбери время и занимайся в комфортном ритме");
+        addText(root, "ВРЕМЯ УЧЁБЫ", 12, PINK, true);
+        LinearLayout studyChoices = new LinearLayout(this);
+        int[] studyOptions = {15, 25, 30, 45, 60};
+        for (int minutes : studyOptions) {
+            Button b = button(minutes + "м", selectedStudyMinutes == minutes);
+            studyChoices.addView(b, new LinearLayout.LayoutParams(0, dp(46), 1f));
+            b.setOnClickListener(v -> { if (!timerRunning) { selectedStudyMinutes = minutes; timerRemainingMs = minutes * 60000L; showPomodoro(); } });
+        }
+        root.addView(studyChoices, lp(-1, 48, 0, 4, 0, 12));
+        addText(root, "ПЕРЕРЫВ", 12, PINK, true);
+        LinearLayout breakChoices = new LinearLayout(this);
+        int[] breakOptions = {5, 10, 15};
+        for (int minutes : breakOptions) {
+            Button b = button(minutes + "м", selectedBreakMinutes == minutes);
+            breakChoices.addView(b, new LinearLayout.LayoutParams(0, dp(44), 1f));
+            b.setOnClickListener(v -> { if (!timerRunning) { selectedBreakMinutes = minutes; showPomodoro(); } });
+        }
+        root.addView(breakChoices, lp(-1, 46, 0, 4, 0, 22));
+        LinearLayout timerCard = card(); timerCard.setGravity(Gravity.CENTER);
+        timerStatus = text(timerIsBreak ? "Время отдохнуть 🌷" : "Время для себя и учёбы 💗", 15, PINK, true); timerStatus.setGravity(Gravity.CENTER);
+        timerCard.addView(timerStatus, lp(-1, 36, 0, 0, 0, 4));
+        timerDisplay = text(formatTimer(timerRemainingMs > 0 ? timerRemainingMs : selectedStudyMinutes * 60000L), 48, DARK, true); timerDisplay.setGravity(Gravity.CENTER);
+        timerCard.addView(timerDisplay, lp(-1, 84, 0, 0, 0, 4));
+        root.addView(timerCard, lp(-1, -2, 0, 0, 0, 16));
+        timerStartButton = button(timerRunning ? "⏸  Пауза" : "▶  Начать", true);
+        timerStartButton.setOnClickListener(v -> toggleTimer()); root.addView(timerStartButton, lp(-1, 54, 0, 0, 0, 8));
+        Button reset = button("↺  Сбросить", false); reset.setOnClickListener(v -> { timerHandler.removeCallbacks(timerTick); timerRunning = false; timerIsBreak = false; timerRemainingMs = selectedStudyMinutes * 60000L; showPomodoro(); }); root.addView(reset, lp(-1, 48, 0, 0, 0, 8));
+        Button back = button("← На главную", false); back.setOnClickListener(v -> showHome()); root.addView(back, lp(-1, 48, 0, 0, 0, 0));
+        if (timerRemainingMs <= 0) timerRemainingMs = selectedStudyMinutes * 60000L;
+        if (timerRunning) updateTimerDisplay();
+    }
+
+    private String formatTimer(long ms) {
+        long sec = Math.max(0, ms / 1000); return String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60);
+    }
+
+    private void toggleTimer() {
+        if (timerRunning) {
+            timerRemainingMs = Math.max(0, timerEndElapsed - SystemClock.elapsedRealtime());
+            timerRunning = false; timerHandler.removeCallbacks(timerTick);
+            if (!timerIsBreak) recordStudyMinutes((int)((SystemClock.elapsedRealtime() - timerSessionStarted) / 60000L));
+            showPomodoro();
+        } else {
+            if (timerRemainingMs <= 0) timerRemainingMs = (timerIsBreak ? selectedBreakMinutes : selectedStudyMinutes) * 60000L;
+            timerRunning = true; timerSessionStarted = SystemClock.elapsedRealtime(); timerEndElapsed = timerSessionStarted + timerRemainingMs;
+            timerTick = new Runnable() { @Override public void run() { updateTimerDisplay(); long left = timerEndElapsed - SystemClock.elapsedRealtime(); if (left <= 0) finishTimerPhase(); else timerHandler.postDelayed(this, 250); } };
+            timerHandler.post(timerTick); showPomodoro();
+        }
+    }
+
+    private void updateTimerDisplay() {
+        if (timerDisplay != null) timerDisplay.setText(formatTimer(Math.max(0, timerEndElapsed - SystemClock.elapsedRealtime())));
+        if (timerStartButton != null) timerStartButton.setText("⏸  Пауза");
+    }
+
+    private void finishTimerPhase() {
+        timerHandler.removeCallbacks(timerTick); timerRunning = false; timerRemainingMs = 0;
+        if (!timerIsBreak) {
+            recordStudyMinutes((int)((SystemClock.elapsedRealtime() - timerSessionStarted) / 60000L)); timerIsBreak = true; timerRemainingMs = selectedBreakMinutes * 60000L;
+            Toast.makeText(this, "Ты большая умничка! Время отдохнуть 🌸", Toast.LENGTH_LONG).show();
+        } else { timerIsBreak = false; timerRemainingMs = selectedStudyMinutes * 60000L; Toast.makeText(this, "Перерыв окончен. Ты готова продолжать! 💗", Toast.LENGTH_LONG).show(); }
+        if ("pomodoro".equals(currentScreen)) showPomodoro();
+    }
+
+    private void recordStudyMinutes(int minutes) {
+        if (minutes <= 0) return;
+        String key = "study_minutes_" + todayKey();
+        prefs.edit().putInt(key, prefs.getInt(key, 0) + minutes).apply();
+        recordStudyDay();
+    }
+
+    private void showDiary() {
+        currentScreen = "diary";
+        base("Дневник успехов 📔", "Здесь важен каждый твой маленький шаг");
+        EditText note = new EditText(this); note.setHint("Сегодня у меня получилось..."); note.setTextSize(16); note.setTextColor(DARK); note.setHintTextColor(MUTED); note.setGravity(Gravity.TOP); note.setMinLines(4); note.setPadding(dp(14), dp(12), dp(14), dp(12)); note.setBackground(shape(0xFFFFFFFF, 18, 0xFFFFD5E1));
+        root.addView(note, lp(-1, 130, 0, 0, 0, 10));
+        Button save = button("♡  Сохранить запись", true); save.setOnClickListener(v -> { String value = note.getText().toString().trim(); if (value.isEmpty()) { Toast.makeText(this, "Напиши хотя бы пару слов 💗", Toast.LENGTH_SHORT).show(); return; } long id = System.currentTimeMillis(); Set<String> ids = new TreeSet<>(prefs.getStringSet("diary_ids", new TreeSet<String>())); ids.add(String.valueOf(id)); prefs.edit().putString("diary_" + id, value).putStringSet("diary_ids", ids).apply(); note.setText(""); Toast.makeText(this, "Запись сохранена ❤️", Toast.LENGTH_SHORT).show(); showDiary(); }); root.addView(save, lp(-1, 52, 0, 0, 0, 16));
+        addText(root, "МОИ ЗАПИСИ", 12, PINK, true);
+        Set<String> ids = new TreeSet<>(prefs.getStringSet("diary_ids", new TreeSet<String>()));
+        List<String> sorted = new ArrayList<>(ids); java.util.Collections.sort(sorted, java.util.Collections.reverseOrder());
+        if (sorted.isEmpty()) addText(root, "Пока записей нет. Сохрани свою первую маленькую победу 🌷", 14, MUTED, false);
+        for (String id : sorted) {
+            String value = prefs.getString("diary_" + id, ""); if (value.isEmpty()) continue;
+            LinearLayout entry = card(); String date = new SimpleDateFormat("d MMMM yyyy, HH:mm", new Locale("ru")).format(new Date(Long.parseLong(id)));
+            addText(entry, "🌸  " + date, 12, PINK, true); addText(entry, value, 15, DARK, false);
+            Button delete = button("Удалить запись", false); delete.setOnClickListener(v -> { Set<String> updated = new TreeSet<>(prefs.getStringSet("diary_ids", new TreeSet<String>())); updated.remove(id); prefs.edit().remove("diary_" + id).putStringSet("diary_ids", updated).apply(); showDiary(); }); entry.addView(delete, lp(-1, 42, 0, 6, 0, 0)); root.addView(entry, lp(-1, -2, 0, 0, 0, 10));
+        }
+        Button back = button("← На главную", false); back.setOnClickListener(v -> showHome()); root.addView(back, lp(-1, 48, 0, 8, 0, 0));
+    }
+
+    private void showMood() {
+        currentScreen = "mood";
+        base("Обнимашки для тебя 💗", "Если грустно — побудь здесь немного. Ты не одна.");
+        int[] pictures = {R.drawable.mood_kitten, R.drawable.mood_bunny, R.drawable.mood_bear, R.drawable.mood_tulip};
+        String[] captions = {"Ты достойна всей нежности мира. ❤️", "Пусть сегодня будет хоть одна маленькая радость. 🌷", "Отдохни. Тебе не нужно быть сильной каждую минуту. 💗", "Ты уже делаешь достаточно. Я тобой горжусь! ✨"};
+        moodImageIndex = new Random().nextInt(pictures.length);
+        ImageView picture = new ImageView(this); picture.setImageResource(pictures[moodImageIndex]); picture.setScaleType(ImageView.ScaleType.CENTER_CROP); picture.setBackground(shape(0xFFFFF0F4, 22, 0xFFFFD5E1)); picture.setClipToOutline(true); root.addView(picture, lp(-1, 270, 0, 0, 0, 12));
+        TextView caption = text(captions[moodImageIndex], 18, PINK, true); caption.setGravity(Gravity.CENTER); root.addView(caption, lp(-1, -2, 0, 0, 0, 12));
+        Button another = button("♡  Ещё милоту", true); another.setOnClickListener(v -> showMood()); root.addView(another, lp(-1, 52, 0, 0, 0, 8));
+        Button back = button("← На главную", false); back.setOnClickListener(v -> showHome()); root.addView(back, lp(-1, 48, 0, 0, 0, 0));
     }
 
     private int countStudyDaysThisMonth(Set<String> days, int year, int month) {
@@ -405,6 +538,9 @@ public class MainActivity extends Activity {
             case "progress":
             case "reminders":
             case "message":
+            case "pomodoro":
+            case "diary":
+            case "mood":
                 showHome();
                 break;
             case "home":
