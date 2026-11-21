@@ -39,6 +39,7 @@ import java.util.TimeZone;
 public class MainActivity extends Activity {
     private final int BG = 0xFFFFFBFC, PINK = 0xFFD96C91, PALE = 0xFFFFF0F4, DARK = 0xFF553B46, MUTED = 0xFF927D86;
     private LinearLayout root;
+    private String currentScreen = "home";
     private SharedPreferences prefs;
     private String selectedTopic = null, selectedChapter = null;
     private static final String PREFS = "study_progress";
@@ -54,6 +55,13 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(0xFFFFF3F6);
         if (Build.VERSION.SDK_INT >= 23) getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        // Migrate the last recorded study date from older app versions into the calendar history.
+        String previousStudyDate = prefs.getString("last_study_date", "");
+        if (!previousStudyDate.isEmpty()) {
+            Set<String> history = new TreeSet<>(prefs.getStringSet("study_days", new TreeSet<String>()));
+            history.add(previousStudyDate);
+            prefs.edit().putStringSet("study_days", history).apply();
+        }
         loadChapters();
         scheduleReminders(this);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -141,6 +149,7 @@ public class MainActivity extends Activity {
         TextView s = text(subtitle, 14, MUTED, false); root.addView(s, lp(-1, -2, 0, 0, 0, 18));
     }
     private void showHome() {
+        currentScreen = "home";
         base("Привет, Назка! ❤️", "Твой маленький помощник в учёбе. Каждый шаг — уже успех.");
         int done = prefs.getInt("done_count", 0);
         int streak = currentStreak();
@@ -153,18 +162,19 @@ public class MainActivity extends Activity {
         root.addView(progress, lp(-1, -2, 0, 0, 0, 18));
         action("📐  Математика", "Выбрать раздел и тему", this::showChapters);
         action("📊  Мой прогресс", "Посмотреть прогресс по разделам и темам", this::showProgress);
-        action("✅  Я позанималась", "Засчитать сегодняшнее занятие", this::markStudyOnly);
-        action("💌  Послание", "Немного поддержки на сегодня", () -> { String m = messages[new Random().nextInt(messages.length)]; base("Послание для тебя 💌", "Маленькое напоминание:"); addText(root, m, 22, PINK, true); backHome(); });
+        action("💌  Послание", "Немного поддержки на сегодня", () -> { currentScreen = "message"; String m = messages[new Random().nextInt(messages.length)]; base("Послание для тебя 💌", "Маленькое напоминание:"); addText(root, m, 22, PINK, true); backHome(); });
         action("🔔  Настроить напоминания", "Выбрать дни недели и удобное время", this::showReminderSettings);
         LinearLayout note = card(); addText(note, "⏰  НАПОМИНАНИЯ", 13, PINK, true); addText(note, reminderSummary(), 14, DARK, false); root.addView(note, lp(-1, -2, 0, 8, 0, 0));
     }
     private String word(int n) { int x=n%10, y=n%100; if(x==1 && y!=11)return "урок"; if(x>=2&&x<=4&&(y<12||y>14))return "урока"; return "уроков"; }
     private void showChapters() {
+        currentScreen = "chapters";
         base("Выбери раздел 📐", "Все темы из твоего учебного плана");
         for (String chapter : chapters.keySet()) action(chapter, chapters.get(chapter).size() + " учебных тем", () -> { selectedChapter = chapter; showTopics(chapter); });
         backHome();
     }
     private void showTopics(String chapter) {
+        currentScreen = "topics";
         base(chapter, "Выбери тему, которую хочешь изучить:");
         for (String topic : chapters.get(chapter)) {
             int percent = topicProgress(topic);
@@ -173,6 +183,7 @@ public class MainActivity extends Activity {
         Button back = button("← К разделам", false); back.setOnClickListener(v -> showChapters()); root.addView(back, lp(-1, 52, 0, 12, 0, 0));
     }
     private void showTopic(String topic) {
+        currentScreen = "topic";
         base("Твоя тема 📖", "Учись в своём темпе — каждый шаг важен");
         int percent = topicProgress(topic);
         LinearLayout box = card();
@@ -193,8 +204,11 @@ public class MainActivity extends Activity {
             levels.addView(b, params);
             b.setOnClickListener(v -> {
                 saveTopicProgress(topic, value);
+                if (value == 100) recordStudyDay();
                 showTopic(topic);
-                Toast.makeText(this, value == 100 ? "Тема изучена! Умничка! ❤️" : "Прогресс сохранён: " + value + "%", Toast.LENGTH_SHORT).show();
+                if (value == 100) {
+                    Toast.makeText(this, "Умничка! ❤️", Toast.LENGTH_LONG).show();
+                }
             });
         }
         root.addView(levels, lp(-1, -2, 0, 0, 0, 8));
@@ -224,29 +238,29 @@ public class MainActivity extends Activity {
     private void recordStudyDay() {
         String today = todayKey();
         String last = prefs.getString("last_study_date", "");
+        Set<String> history = new TreeSet<>(prefs.getStringSet("study_days", new TreeSet<String>()));
+        history.add(today);
         if (!today.equals(last)) {
             int streak = prefs.getInt("current_streak", 0);
             if (isYesterday(last)) streak++; else streak = 1;
             prefs.edit().putInt("current_streak", streak)
                     .putInt("longest_streak", Math.max(streak, prefs.getInt("longest_streak", 0)))
-                    .putString("last_study_date", today).apply();
+                    .putString("last_study_date", today)
+                    .putStringSet("study_days", history).apply();
+        } else {
+            prefs.edit().putStringSet("study_days", history).apply();
         }
-    }
-
-    private void markStudyOnly() {
-        recordStudyDay();
-        Toast.makeText(this, "Умничка! ❤️ Сегодняшнее занятие засчитано!", Toast.LENGTH_LONG).show();
-        showHome();
     }
 
     private void markDone() {
         if (selectedTopic != null) saveTopicProgress(selectedTopic, 100);
         recordStudyDay();
-        Toast.makeText(this, "Умничка! ❤️ Прогресс сохранён. Можешь продолжать заниматься!", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Умничка! ❤️", Toast.LENGTH_LONG).show();
         if (selectedTopic != null) showTopic(selectedTopic); else showHome();
     }
 
     private void showProgress() {
+        currentScreen = "progress";
         base("Мой прогресс 📊", "Здесь видно, сколько уже изучено по каждой теме");
         int totalTopics = 0, completedTopics = 0;
         for (String chapter : chapters.keySet()) {
@@ -256,6 +270,53 @@ public class MainActivity extends Activity {
             }
         }
         int overall = totalTopics == 0 ? 0 : completedTopics * 100 / totalTopics;
+
+        // Study calendar: every date on which the learner marked a study session.
+        LinearLayout calendarCard = card();
+        addText(calendarCard, "📅  ДНИ ЗАНЯТИЙ", 12, PINK, true);
+        Calendar month = Calendar.getInstance(TimeZone.getTimeZone("Asia/Baku"));
+        int todayDay = month.get(Calendar.DAY_OF_MONTH);
+        int monthNumber = month.get(Calendar.MONTH);
+        int yearNumber = month.get(Calendar.YEAR);
+        String monthLabel = new SimpleDateFormat("LLLL yyyy", new Locale("ru")).format(month.getTime());
+        addText(calendarCard, monthLabel.substring(0, 1).toUpperCase(new Locale("ru")) + monthLabel.substring(1), 18, DARK, true);
+        LinearLayout weekHeader = new LinearLayout(this);
+        weekHeader.setOrientation(LinearLayout.HORIZONTAL);
+        String[] shortDays = {"Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"};
+        for (String dayLabel : shortDays) {
+            TextView cell = text(dayLabel, 11, MUTED, true);
+            cell.setGravity(Gravity.CENTER);
+            weekHeader.addView(cell, new LinearLayout.LayoutParams(0, dp(30), 1f));
+        }
+        calendarCard.addView(weekHeader, lp(-1, 30, 0, 4, 0, 2));
+        Set<String> studiedDays = new TreeSet<>(prefs.getStringSet("study_days", new TreeSet<String>()));
+        Calendar first = (Calendar) month.clone();
+        first.set(Calendar.DAY_OF_MONTH, 1);
+        int offset = (first.get(Calendar.DAY_OF_WEEK) + 5) % 7; // Monday first
+        int daysInMonth = month.getActualMaximum(Calendar.DAY_OF_MONTH);
+        LinearLayout week = null;
+        for (int slot = 0; slot < offset + daysInMonth; slot++) {
+            if (slot % 7 == 0) {
+                week = new LinearLayout(this);
+                week.setOrientation(LinearLayout.HORIZONTAL);
+                calendarCard.addView(week, lp(-1, 38, 0, 1, 0, 1));
+            }
+            TextView cell = text("", 12, DARK, true);
+            cell.setGravity(Gravity.CENTER);
+            if (slot >= offset) {
+                int day = slot - offset + 1;
+                String dateKey = String.format(Locale.US, "%04d-%02d-%02d", yearNumber, monthNumber + 1, day);
+                boolean studied = studiedDays.contains(dateKey);
+                cell.setText((studied ? "♥\n" : "") + day);
+                cell.setTextColor(studied ? PINK : DARK);
+                cell.setBackground(shape(studied ? PALE : 0xFFFFFFFF, 12, studied ? 0xFFFFC6D7 : 0x00FFFFFF));
+                if (day == todayDay) cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            }
+            week.addView(cell, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        }
+        addText(calendarCard, "Отмечено дней в этом месяце: " + countStudyDaysThisMonth(studiedDays, yearNumber, monthNumber), 13, MUTED, false);
+        root.addView(calendarCard, lp(-1, -2, 0, 0, 0, 14));
+
         LinearLayout summary = card();
         addText(summary, "🌸  ОБЩИЙ РЕЗУЛЬТАТ", 12, PINK, true);
         addText(summary, overall + "% изучено", 27, DARK, true);
@@ -281,6 +342,37 @@ public class MainActivity extends Activity {
         Button back = button("← На главную", true);
         back.setOnClickListener(v -> showHome());
         root.addView(back, lp(-1, 52, 0, 4, 0, 0));
+    }
+
+    private int countStudyDaysThisMonth(Set<String> days, int year, int month) {
+        int count = 0;
+        String prefix = String.format(Locale.US, "%04d-%02d-", year, month + 1);
+        for (String day : days) if (day.startsWith(prefix)) count++;
+        return count;
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        // Hardware/system Back navigates inside the app instead of closing it.
+        switch (currentScreen) {
+            case "topic":
+                if (selectedChapter != null) showTopics(selectedChapter); else showHome();
+                break;
+            case "topics":
+                showChapters();
+                break;
+            case "chapters":
+            case "progress":
+            case "reminders":
+            case "message":
+                showHome();
+                break;
+            case "home":
+            default:
+                Toast.makeText(this, "Ты уже на главной странице ❤️", Toast.LENGTH_SHORT).show();
+                break;
+        }
     }
 
     private int countCompleted(List<String> topics) {
@@ -349,6 +441,7 @@ public class MainActivity extends Activity {
     }
 
     private void showReminderSettings() {
+        currentScreen = "reminders";
         base("Напоминания 🔔", "Выбери дни и время. Часовой пояс — Баку.");
         addText(root, "ДНИ НЕДЕЛИ", 12, PINK, true);
         dayChecks.clear();
