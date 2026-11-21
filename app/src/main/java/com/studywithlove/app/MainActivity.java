@@ -20,6 +20,7 @@ import android.widget.CheckBox;
 import android.widget.TimePicker;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.util.ArrayList;
@@ -130,7 +131,11 @@ public class MainActivity extends Activity {
     private void base(String title, String subtitle) {
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22), dp(20), dp(22), dp(28)); root.setBackgroundColor(BG);
-        scroll.addView(root); setContentView(scroll);
+        scroll.addView(root);
+        scroll.setAlpha(0f);
+        scroll.setTranslationY(dp(10));
+        setContentView(scroll);
+        scroll.animate().alpha(1f).translationY(0f).setDuration(220).start();
         TextView brand = text("STUDY WITH LOVE  🌷", 12, PINK, true); brand.setLetterSpacing(0.10f); root.addView(brand, lp(-1, -2, 0, 0, 0, 8));
         TextView h = text(title, 27, DARK, true); root.addView(h, lp(-1, -2, 0, 0, 0, 5));
         TextView s = text(subtitle, 14, MUTED, false); root.addView(s, lp(-1, -2, 0, 0, 0, 18));
@@ -147,8 +152,8 @@ public class MainActivity extends Activity {
         addText(progress, "Занимайся каждый день и собирай свою серию!", 13, MUTED, false);
         root.addView(progress, lp(-1, -2, 0, 0, 0, 18));
         action("📐  Математика", "Выбрать раздел и тему", this::showChapters);
-        action("📚  Повторить темы", "Вернуться к списку уроков", this::showChapters);
-        action("✅  Я позанималась", "Отметить выбранную тему", this::markDone);
+        action("📊  Мой прогресс", "Посмотреть прогресс по разделам и темам", this::showProgress);
+        action("✅  Я позанималась", "Засчитать сегодняшнее занятие", this::markStudyOnly);
         action("💌  Послание", "Немного поддержки на сегодня", () -> { String m = messages[new Random().nextInt(messages.length)]; base("Послание для тебя 💌", "Маленькое напоминание:"); addText(root, m, 22, PINK, true); backHome(); });
         action("🔔  Настроить напоминания", "Выбрать дни недели и удобное время", this::showReminderSettings);
         LinearLayout note = card(); addText(note, "⏰  НАПОМИНАНИЯ", 13, PINK, true); addText(note, reminderSummary(), 14, DARK, false); root.addView(note, lp(-1, -2, 0, 8, 0, 0));
@@ -162,34 +167,139 @@ public class MainActivity extends Activity {
     private void showTopics(String chapter) {
         base(chapter, "Выбери тему, которую хочешь изучить:");
         for (String topic : chapters.get(chapter)) {
-            boolean done = prefs.getBoolean("done_" + topic, false);
-            action((done ? "✓  " : "♡  ") + topic, done ? "Уже выполнено — можно повторить" : "Нажми, чтобы открыть урок", () -> { selectedTopic = topic; showTopic(topic); });
+            int percent = topicProgress(topic);
+            action((percent == 100 ? "✓  " : "♡  ") + topic, "Изучено на " + percent + "% · Нажми, чтобы открыть тему", () -> { selectedTopic = topic; showTopic(topic); });
         }
         Button back = button("← К разделам", false); back.setOnClickListener(v -> showChapters()); root.addView(back, lp(-1, 52, 0, 12, 0, 0));
     }
     private void showTopic(String topic) {
-        base("Твоя тема 📖", "Сегодня занимаемся с любовью к знаниям");
-        LinearLayout box = card(); addText(box, topic, 20, DARK, true); addText(box, "Открой соответствующий урок в учебнике, изучи материал и реши задания. Когда закончишь, возвращайся сюда и отметь занятие.", 15, MUTED, false); root.addView(box, lp(-1, -2, 0, 0, 0, 16));
-        Button done = button("✅  Я позанималась", true); done.setOnClickListener(v -> markDone()); root.addView(done, lp(-1, 54, 0, 0, 0, 10));
-        Button back = button("← К темам", false); back.setOnClickListener(v -> showTopics(selectedChapter)); root.addView(back, lp(-1, 50, 0, 0, 0, 0));
-    }
-    private void markDone() {
-        SharedPreferences.Editor edit = prefs.edit();
-        if (selectedTopic != null && !prefs.getBoolean("done_" + selectedTopic, false)) {
-            edit.putBoolean("done_" + selectedTopic, true).putInt("done_count", prefs.getInt("done_count", 0) + 1);
+        base("Твоя тема 📖", "Учись в своём темпе — каждый шаг важен");
+        int percent = topicProgress(topic);
+        LinearLayout box = card();
+        addText(box, topic, 20, DARK, true);
+        addText(box, "Открой соответствующий урок в учебнике, изучи материал и реши задания. Отмечай свой прогресс — он сохранится автоматически.", 15, MUTED, false);
+        addText(box, "ТВОЙ ПРОГРЕСС: " + percent + "%", 13, PINK, true);
+        addProgressLine(box, "Изучение темы", percent);
+        root.addView(box, lp(-1, -2, 0, 0, 0, 14));
+
+        addText(root, "ОТМЕТИТЬ ПРОГРЕСС", 12, PINK, true);
+        LinearLayout levels = new LinearLayout(this);
+        levels.setOrientation(LinearLayout.HORIZONTAL);
+        int[] values = {25, 50, 75, 100};
+        for (int value : values) {
+            Button b = button(value + "%", percent >= value);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+            params.setMargins(dp(2), dp(4), dp(2), dp(10));
+            levels.addView(b, params);
+            b.setOnClickListener(v -> {
+                saveTopicProgress(topic, value);
+                showTopic(topic);
+                Toast.makeText(this, value == 100 ? "Тема изучена! Умничка! ❤️" : "Прогресс сохранён: " + value + "%", Toast.LENGTH_SHORT).show();
+            });
         }
+        root.addView(levels, lp(-1, -2, 0, 0, 0, 8));
+
+        Button done = button("✅  Я позанималась сегодня", true);
+        done.setOnClickListener(v -> markDone());
+        root.addView(done, lp(-1, 54, 0, 4, 0, 10));
+        Button back = button("← К темам", false);
+        back.setOnClickListener(v -> showTopics(selectedChapter));
+        root.addView(back, lp(-1, 50, 0, 0, 0, 0));
+    }
+
+    private int topicProgress(String topic) {
+        if (prefs.getBoolean("done_" + topic, false)) return 100;
+        return Math.max(0, Math.min(100, prefs.getInt("progress_" + topic, 0)));
+    }
+
+    private void saveTopicProgress(String topic, int value) {
+        int old = topicProgress(topic);
+        int next = Math.max(0, Math.min(100, value));
+        SharedPreferences.Editor e = prefs.edit().putInt("progress_" + topic, next).putBoolean("done_" + topic, next == 100);
+        if (old < 100 && next == 100) e.putInt("done_count", prefs.getInt("done_count", 0) + 1);
+        if (old == 100 && next < 100) e.putInt("done_count", Math.max(0, prefs.getInt("done_count", 0) - 1));
+        e.apply();
+    }
+
+    private void recordStudyDay() {
         String today = todayKey();
         String last = prefs.getString("last_study_date", "");
         if (!today.equals(last)) {
             int streak = prefs.getInt("current_streak", 0);
             if (isYesterday(last)) streak++; else streak = 1;
-            edit.putInt("current_streak", streak)
+            prefs.edit().putInt("current_streak", streak)
                     .putInt("longest_streak", Math.max(streak, prefs.getInt("longest_streak", 0)))
-                    .putString("last_study_date", today);
+                    .putString("last_study_date", today).apply();
         }
-        edit.apply();
-        Toast.makeText(this, "Умничка! ❤️ День засчитан в твою серию!", Toast.LENGTH_LONG).show();
+    }
+
+    private void markStudyOnly() {
+        recordStudyDay();
+        Toast.makeText(this, "Умничка! ❤️ Сегодняшнее занятие засчитано!", Toast.LENGTH_LONG).show();
         showHome();
+    }
+
+    private void markDone() {
+        if (selectedTopic != null) saveTopicProgress(selectedTopic, 100);
+        recordStudyDay();
+        Toast.makeText(this, "Умничка! ❤️ Прогресс сохранён. Можешь продолжать заниматься!", Toast.LENGTH_LONG).show();
+        if (selectedTopic != null) showTopic(selectedTopic); else showHome();
+    }
+
+    private void showProgress() {
+        base("Мой прогресс 📊", "Здесь видно, сколько уже изучено по каждой теме");
+        int totalTopics = 0, completedTopics = 0;
+        for (String chapter : chapters.keySet()) {
+            for (String topic : chapters.get(chapter)) {
+                totalTopics++;
+                if (topicProgress(topic) == 100) completedTopics++;
+            }
+        }
+        int overall = totalTopics == 0 ? 0 : completedTopics * 100 / totalTopics;
+        LinearLayout summary = card();
+        addText(summary, "🌸  ОБЩИЙ РЕЗУЛЬТАТ", 12, PINK, true);
+        addText(summary, overall + "% изучено", 27, DARK, true);
+        addText(summary, completedTopics + " из " + totalTopics + " тем завершено", 14, MUTED, false);
+        addProgressLine(summary, "Весь учебный план", overall);
+        root.addView(summary, lp(-1, -2, 0, 0, 0, 16));
+
+        for (String chapter : chapters.keySet()) {
+            List<String> topics = chapters.get(chapter);
+            int sum = 0;
+            for (String topic : topics) sum += topicProgress(topic);
+            int chapterPercent = topics.isEmpty() ? 0 : sum / topics.size();
+            LinearLayout section = card();
+            addText(section, chapter, 17, DARK, true);
+            addText(section, chapterPercent + "% · " + countCompleted(topics) + " из " + topics.size() + " тем полностью изучено", 13, MUTED, false);
+            addProgressLine(section, "Прогресс раздела", chapterPercent);
+            for (String topic : topics) {
+                int value = topicProgress(topic);
+                addProgressLine(section, topic + " — " + value + "%", value);
+            }
+            root.addView(section, lp(-1, -2, 0, 0, 0, 12));
+        }
+        Button back = button("← На главную", true);
+        back.setOnClickListener(v -> showHome());
+        root.addView(back, lp(-1, 52, 0, 4, 0, 0));
+    }
+
+    private int countCompleted(List<String> topics) {
+        int count = 0;
+        for (String topic : topics) if (topicProgress(topic) == 100) count++;
+        return count;
+    }
+
+    private void addProgressLine(LinearLayout parent, String label, int percent) {
+        TextView caption = text(label, 12, MUTED, false);
+        parent.addView(caption, lp(-1, -2, 0, 5, 0, 3));
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(Math.max(0, Math.min(100, percent)));
+        if (Build.VERSION.SDK_INT >= 21) {
+            bar.setProgressTintList(android.content.res.ColorStateList.valueOf(PINK));
+            bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFFFE2EA));
+        }
+        parent.addView(bar, lp(-1, 8, 0, 0, 0, 5));
     }
 
     private boolean isYesterday(String date) {
