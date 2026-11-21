@@ -42,6 +42,9 @@ public class MainActivity extends Activity {
     private String currentScreen = "home";
     private SharedPreferences prefs;
     private String selectedTopic = null, selectedChapter = null;
+    private TextView topicProgressLabel;
+    private ProgressBar topicProgressBar;
+    private Button[] progressButtons = new Button[4];
     private static final String PREFS = "study_progress";
     private static final String[] DAY_NAMES = {"Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
     private final List<String> reminderTimes = new ArrayList<>();
@@ -143,7 +146,8 @@ public class MainActivity extends Activity {
         scroll.setAlpha(0f);
         scroll.setTranslationY(dp(10));
         setContentView(scroll);
-        scroll.animate().alpha(1f).translationY(0f).setDuration(220).start();
+        scroll.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        scroll.animate().alpha(1f).translationY(0f).setDuration(300).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
         TextView brand = text("STUDY WITH LOVE  🌷", 12, PINK, true); brand.setLetterSpacing(0.10f); root.addView(brand, lp(-1, -2, 0, 0, 0, 8));
         TextView h = text(title, 27, DARK, true); root.addView(h, lp(-1, -2, 0, 0, 0, 5));
         TextView s = text(subtitle, 14, MUTED, false); root.addView(s, lp(-1, -2, 0, 0, 0, 18));
@@ -165,12 +169,19 @@ public class MainActivity extends Activity {
         action("💌  Послание", "Немного поддержки на сегодня", () -> { currentScreen = "message"; String m = messages[new Random().nextInt(messages.length)]; base("Послание для тебя 💌", "Маленькое напоминание:"); addText(root, m, 22, PINK, true); backHome(); });
         action("🔔  Настроить напоминания", "Выбрать дни недели и удобное время", this::showReminderSettings);
         LinearLayout note = card(); addText(note, "⏰  НАПОМИНАНИЯ", 13, PINK, true); addText(note, reminderSummary(), 14, DARK, false); root.addView(note, lp(-1, -2, 0, 8, 0, 0));
+        TextView made = text("Сделано с любовью ♡", 11, MUTED, false); made.setGravity(Gravity.CENTER); made.setAlpha(0.85f); root.addView(made, lp(-1, 34, 0, 16, 0, 0));
     }
     private String word(int n) { int x=n%10, y=n%100; if(x==1 && y!=11)return "урок"; if(x>=2&&x<=4&&(y<12||y>14))return "урока"; return "уроков"; }
     private void showChapters() {
         currentScreen = "chapters";
         base("Выбери раздел 📐", "Все темы из твоего учебного плана");
-        for (String chapter : chapters.keySet()) action(chapter, chapters.get(chapter).size() + " учебных тем", () -> { selectedChapter = chapter; showTopics(chapter); });
+        int chapterNumber = 1;
+        for (String chapter : chapters.keySet()) {
+            final String selected = chapter;
+            String prettyName = chapter.replaceFirst("^[^ ]+\\s*", "");
+            action("🌸  Раздел " + chapterNumber + "\n" + prettyName, chapters.get(chapter).size() + " учебных тем", () -> { selectedChapter = selected; showTopics(selected); });
+            chapterNumber++;
+        }
         backHome();
     }
     private void showTopics(String chapter) {
@@ -189,26 +200,28 @@ public class MainActivity extends Activity {
         LinearLayout box = card();
         addText(box, topic, 20, DARK, true);
         addText(box, "Открой соответствующий урок в учебнике, изучи материал и реши задания. Отмечай свой прогресс — он сохранится автоматически.", 15, MUTED, false);
-        addText(box, "ТВОЙ ПРОГРЕСС: " + percent + "%", 13, PINK, true);
-        addProgressLine(box, "Изучение темы", percent);
+        topicProgressLabel = text("ТВОЙ ПРОГРЕСС: " + percent + "%", 13, PINK, true); box.addView(topicProgressLabel, lp(-1, -2, 0, 0, 0, 5));
+        topicProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); topicProgressBar.setMax(100); topicProgressBar.setProgress(percent);
+        if (Build.VERSION.SDK_INT >= 21) { topicProgressBar.setProgressTintList(android.content.res.ColorStateList.valueOf(PINK)); topicProgressBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFFFE2EA)); }
+        box.addView(topicProgressBar, lp(-1, 8, 0, 0, 0, 5));
         root.addView(box, lp(-1, -2, 0, 0, 0, 14));
 
         addText(root, "ОТМЕТИТЬ ПРОГРЕСС", 12, PINK, true);
         LinearLayout levels = new LinearLayout(this);
         levels.setOrientation(LinearLayout.HORIZONTAL);
         int[] values = {25, 50, 75, 100};
-        for (int value : values) {
+        for (int index = 0; index < values.length; index++) {
+            final int value = values[index];
             Button b = button(value + "%", percent >= value);
+            progressButtons[index] = b;
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
             params.setMargins(dp(2), dp(4), dp(2), dp(10));
             levels.addView(b, params);
             b.setOnClickListener(v -> {
                 saveTopicProgress(topic, value);
                 if (value == 100) recordStudyDay();
-                showTopic(topic);
-                if (value == 100) {
-                    Toast.makeText(this, "Умничка! ❤️", Toast.LENGTH_LONG).show();
-                }
+                refreshTopicProgress(value);
+                if (value == 100) showPraise();
             });
         }
         root.addView(levels, lp(-1, -2, 0, 0, 0, 8));
@@ -219,6 +232,31 @@ public class MainActivity extends Activity {
         Button back = button("← К темам", false);
         back.setOnClickListener(v -> showTopics(selectedChapter));
         root.addView(back, lp(-1, 50, 0, 0, 0, 0));
+    }
+
+    private void refreshTopicProgress(int value) {
+        if (topicProgressLabel != null) topicProgressLabel.setText("ТВОЙ ПРОГРЕСС: " + value + "%");
+        if (topicProgressBar != null) topicProgressBar.setProgress(value, true);
+        int[] values = {25, 50, 75, 100};
+        for (int i = 0; i < progressButtons.length; i++) {
+            if (progressButtons[i] != null) progressButtons[i].setBackground(shape(value >= values[i] ? PINK : PALE, 18, value >= values[i] ? PINK : 0xFFFFDCE6));
+            if (progressButtons[i] != null) progressButtons[i].setTextColor(value >= values[i] ? 0xFFFFFFFF : PINK);
+        }
+    }
+
+    private void showPraise() {
+        LinearLayout toastView = new LinearLayout(this);
+        toastView.setGravity(Gravity.CENTER_VERTICAL);
+        toastView.setPadding(dp(18), dp(10), dp(20), dp(10));
+        toastView.setBackground(shape(0xFFFFF0F5, 28, 0xFFFFC6D7));
+        TextView flower = text("🌸", 22, PINK, true);
+        toastView.addView(flower, lp(34, 34, 0, 0, 9, 0));
+        TextView praise = text("Умничка! ❤️", 16, DARK, true);
+        toastView.addView(praise, lp(-2, 38, 0, 0, 0, 0));
+        Toast toast = new Toast(this);
+        toast.setDuration(Toast.LENGTH_LONG);
+        toast.setView(toastView);
+        toast.show();
     }
 
     private int topicProgress(String topic) {
@@ -255,8 +293,8 @@ public class MainActivity extends Activity {
     private void markDone() {
         if (selectedTopic != null) saveTopicProgress(selectedTopic, 100);
         recordStudyDay();
-        Toast.makeText(this, "Умничка! ❤️", Toast.LENGTH_LONG).show();
-        if (selectedTopic != null) showTopic(selectedTopic); else showHome();
+        if (selectedTopic != null) refreshTopicProgress(100);
+        showPraise();
     }
 
     private void showProgress() {
@@ -307,9 +345,10 @@ public class MainActivity extends Activity {
                 int day = slot - offset + 1;
                 String dateKey = String.format(Locale.US, "%04d-%02d-%02d", yearNumber, monthNumber + 1, day);
                 boolean studied = studiedDays.contains(dateKey);
-                cell.setText((studied ? "♥\n" : "") + day);
+                cell.setText(studied ? "♥\n" + day : String.valueOf(day));
                 cell.setTextColor(studied ? PINK : DARK);
-                cell.setBackground(shape(studied ? PALE : 0xFFFFFFFF, 12, studied ? 0xFFFFC6D7 : 0x00FFFFFF));
+                cell.setBackground(shape(studied ? 0xFFFFE7EF : (day == todayDay ? 0xFFFFF1F5 : 0xFFFFFFFF), 13, day == todayDay ? PINK : (studied ? 0xFFFFBFD1 : 0x00FFFFFF)));
+                cell.setElevation(dp(1));
                 if (day == todayDay) cell.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             }
             week.addView(cell, new LinearLayout.LayoutParams(0, dp(36), 1f));
@@ -420,6 +459,8 @@ public class MainActivity extends Activity {
     }
 
     private Set<String> selectedDays() {
+        Set<String> saved = prefs.getStringSet("reminder_days", null);
+        if (saved != null) return new TreeSet<>(saved);
         Set<String> result = new TreeSet<>();
         for (int d = 1; d <= 7; d++) if (prefs.getBoolean("day_" + d, true)) result.add(String.valueOf(d));
         return result;
